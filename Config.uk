@@ -1,0 +1,24 @@
+### App configuration
+config APPTESTOPERATOR_SOURCE_ADDR
+	string "IP Address of the tuple source"
+	default "172.44.0.1"
+	help
+	  Source IP Address of the tuple source
+
+config APPTESTOPERATOR_TESTBENCH_ADDR
+	string "IP Address of the testbench"
+	default "172.44.0.1"
+	help
+	  Source IP Address of the testbench
+
+config APPTESTOPERATOR_SOURCE_PORT
+	int "PORT of the tuple source"
+	default "8080"
+	help
+	  Port of the tuple source
+
+config APPTESTOPERATOR_TESTBENCH_PORT
+	int "Port of the testbench"
+	default "8080"
+	help
+	  Port of the testbench
