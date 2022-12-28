@@ -1,13 +1,13 @@
 ### App configuration
 config APPTESTOPERATOR_SOURCE_ADDR
 	string "IP Address of the tuple source"
-	default "172.44.0.1"
+	default "10.132.0.15"
 	help
 	  Source IP Address of the tuple source
 
 config APPTESTOPERATOR_TESTBENCH_ADDR
 	string "IP Address of the testbench"
-	default "172.44.0.1"
+	default "10.132.0.15"
 	help
 	  Source IP Address of the testbench
 

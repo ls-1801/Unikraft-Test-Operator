@@ -1,54 +1,21 @@
-/* SPDX-License-Identifier: BSD-3-Clause */
-/*
- * Authors: Simon Kuenzer <simon.kuenzer@neclab.eu>
- *
- * Copyright (c) 2019, NEC Laboratories Europe GmbH, NEC Corporation.
- *                     All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the copyright holder nor the names of its
- *    contributors may be used to endorse or promote products derived from
- *    this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
+/* Import user configuration: */
+#ifdef __Unikraft__
+#include <uk/config.h>
+#endif /* __Unikraft__ */
 
 #include <stdio.h>
+#include <lwip/netif.h>
+#include <lwip/ip.h>
+#include <lwip/dhcp.h>
+#include <lwip/timeouts.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <time.h>
 #include <errno.h>
 
 #define LISTEN_PORT 8123
-static const char reply[] = "HTTP/1.1 200 OK\r\n" \
-			    "Content-type: text/html\r\n" \
-			    "Connection: close\r\n" \
-			    "\r\n" \
-			    "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">" \
-			    "<html>" \
-			    "<head><title>It works!</title></head>" \
-			    "<body><h1>It works!</h1><p>This is only a test.</p></body>" \
-			    "</html>\n";
-
 #define BUFLEN 2048
 static char recvbuf[BUFLEN];
 
@@ -60,8 +27,8 @@ int sent_boot_packet()
 	struct sockaddr_in srv_addr;
 
 	srv_addr.sin_family = AF_INET;
-	lwip_inet_pton(AF_INET, "172.44.0.1", &srv_addr.sin_addr.s_addr);
-	srv_addr.sin_port = htons(LISTEN_PORT);
+	lwip_inet_pton(AF_INET, CONFIG_APPTESTOPERATOR_TESTBENCH_ADDR, &srv_addr.sin_addr.s_addr);
+	srv_addr.sin_port = htons(CONFIG_APPTESTOPERATOR_TESTBENCH_PORT);
 
 	srv = socket(AF_INET, SOCK_DGRAM, 0);
 
@@ -74,7 +41,7 @@ int sent_boot_packet()
 	const char *boot_message = "BOOTED!";
 	size_t boot_message_len = strlen(boot_message);
 
-	rc = sendto(srv, boot_message, boot_message_len, 0, &srv_addr, sizeof(struct sockaddr_in));
+	rc = sendto(srv, boot_message, boot_message_len, 0, (const struct sockaddr *)&srv_addr, sizeof(struct sockaddr_in));
 	printf("Boot package sent!\n");
 	if (rc < 0)
 	{
@@ -88,62 +55,89 @@ out:
 	return rc;
 }
 
-int main(int argc __attribute__((unused)),
-	 char *argv[] __attribute__((unused)))
+int process_tuples()
 {
-	sent_boot_packet();
+	int source_fd;
 	int rc = 0;
-	int srv, client;
 	ssize_t n;
-	struct sockaddr_in srv_addr;
+	struct sockaddr_in src_addr;
 
-	srv = socket(AF_INET, SOCK_STREAM, 0);
-	if (srv < 0) {
-		fprintf(stderr, "Failed to create socket: %d\n", errno);
-		goto out;
+	src_addr.sin_family = AF_INET;
+	lwip_inet_pton(AF_INET, CONFIG_APPTESTOPERATOR_SOURCE_ADDR, &src_addr.sin_addr.s_addr);
+	src_addr.sin_port = htons(CONFIG_APPTESTOPERATOR_SOURCE_PORT);
+
+	source_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+	if (source_fd < 0)
+	{
+		fprintf(stderr, "Failed to create TCP socket: %d\n", errno);
+		goto end;
 	}
 
-	srv_addr.sin_family = AF_INET;
-	srv_addr.sin_addr.s_addr = INADDR_ANY;
-	srv_addr.sin_port = htons(LISTEN_PORT);
+	rc = connect(source_fd, &src_addr, sizeof(struct sockaddr_in));
 
-	rc = bind(srv, (struct sockaddr *) &srv_addr, sizeof(srv_addr));
-	if (rc < 0) {
-		fprintf(stderr, "Failed to bind socket: %d\n", errno);
-		goto out;
+	if (rc < 0)
+	{
+		fprintf(stderr, "Failed to Connect: %d\n", rc);
+		goto close;
 	}
 
-	/* Accept one simultaneous connection */
-	rc = listen(srv, 1);
-	if (rc < 0) {
-		fprintf(stderr, "Failed to listen on socket: %d\n", errno);
-		goto out;
+	printf("Connected to Source!\n");
+
+	const char *request_tuple_message = "SEND TUPLES!";
+	size_t request_tuple_message_len = strlen(request_tuple_message);
+
+	rc = send(source_fd, request_tuple_message, request_tuple_message_len, 0);
+
+	if (rc < 0)
+	{
+		fprintf(stderr, "Failed to send request for tuples: %d\n", rc);
+		goto close;
 	}
 
-	printf("Listening on port %d...\n", LISTEN_PORT);
-	while (1) {
-		client = accept(srv, NULL, 0);
-		if (client < 0) {
-			fprintf(stderr,
-				"Failed to accept incoming connection: %d\n",
-				errno);
-			goto out;
+	while (1)
+	{
+		rc = recv(source_fd, recvbuf, BUFLEN, 0);
+		if (rc < 0)
+		{
+			fprintf(stderr, "Failed to receive: %d\n", rc);
+			goto close;
 		}
-
-		/* Receive some bytes (ignore errors) */
-		read(client, recvbuf, BUFLEN);
-
-		/* Send reply */
-		n = write(client, reply, sizeof(reply) - 1);
-		if (n < 0)
-			fprintf(stderr, "Failed to send a reply\n");
-		else
-			printf("Sent a reply\n");
-
-		/* Close connection */
-		close(client);
+		printf("Tuple: %.*s\n", rc, recvbuf);
 	}
 
-out:
+close:
+	close(source_fd);
+end:
 	return rc;
+}
+
+static void millisleep(unsigned int millisec)
+{
+	struct timespec ts;
+	int ret;
+
+	ts.tv_sec = millisec / 1000;
+	ts.tv_nsec = (millisec % 1000) * 1000000;
+	do
+		ret = nanosleep(&ts, &ts);
+	while (ret && errno == EINTR);
+}
+
+int main(int argc __attribute__((unused)),
+		 char *argv[] __attribute__((unused)))
+{
+	struct netif *netif = netif_find("en1");
+	while (netif_dhcp_data(netif)->state != 10)
+	{
+		millisleep(1);
+	}
+
+	uk_pr_debug_once("Booted %s", "yo");
+
+	printf("DHCP Ready\n");
+	sent_boot_packet();
+	millisleep(1000);
+	process_tuples();
+	return 0;
 }

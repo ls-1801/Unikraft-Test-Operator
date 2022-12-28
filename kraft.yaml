@@ -1,6 +1,6 @@
 ---
 specification: '0.5'
-name: httpreply
+name: testoperator
 unikraft:
   version: 0.11.0
   kconfig:
@@ -9,8 +9,6 @@ unikraft:
     - CONFIG_LIBUKSCHEDCOOP=y
 targets:
   - architecture: x86_64
-    platform: kvm
-  - architecture: arm64
     platform: kvm
 libraries:
   lwip:

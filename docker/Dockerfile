@@ -57,6 +57,7 @@ ENV PATH="${PATH}:/home/appuser/.local/bin"
 
 RUN kraft list update
 
-RUN git clone https://github.com/unikraft-upb/scripts && cd scripts/nolibc/ && ./do-httpreply setup
+RUN git config --global user.email "you@example.com" && git config --global user.name "Your Name"
+RUN git clone https://github.com/ls-1801/unikraft-scripts.git scripts && cd scripts/nolibc/ && ./do-httpreply setup
 WORKDIR /home/appuser/scripts/nolibc
 ENTRYPOINT ["/bin/bash", "/home/appuser/scripts/nolibc/do-httpreply", "build"]
