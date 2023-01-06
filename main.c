@@ -19,6 +19,63 @@
 #define BUFLEN 2048
 static char recvbuf[BUFLEN];
 
+typedef struct
+{
+	int a;
+	int b;
+	int c;
+	int d;
+	int e;
+} tuple;
+
+static tuple tuple_buffer[BUFLEN / sizeof(tuple)];
+
+void print_data(const tuple* data)
+{
+    printf("Data:\n");
+    printf("  a: %d\n", data->a);
+    printf("  b: %d\n", data->b);
+    printf("  c: %d\n", data->c);
+    printf("  d: %d\n", data->d);
+    printf("  e: %d\n", data->e);
+}
+
+
+size_t serialize_tuples(char *buffer, size_t buffer_len, tuple *tuples)
+{
+	size_t number_of_tuples = buffer_len / sizeof(tuple);
+
+	for (int i = 0; i < number_of_tuples; i++)
+	{
+		memcpy(&tuples[i], &buffer[i * sizeof(tuple)], sizeof(tuple));
+	}
+
+	for (int i = 0; i < number_of_tuples; i++)
+	{
+		tuples[i].a = ntohl(tuples[i].a);
+		tuples[i].b = ntohl(tuples[i].b);
+		tuples[i].c = ntohl(tuples[i].c);
+		tuples[i].d = ntohl(tuples[i].d);
+		tuples[i].e = ntohl(tuples[i].e);
+	}
+
+	return number_of_tuples;
+}
+
+void deserialize_tuple(char *buffer, size_t *buffer_size, const tuple *data)
+{
+    tuple data_copy = *data;
+    data_copy.a = htonl(data_copy.a);
+    data_copy.b = htonl(data_copy.b);
+    data_copy.c = htonl(data_copy.c);
+    data_copy.d = htonl(data_copy.d);
+    data_copy.e = htonl(data_copy.e);
+
+    size_t data_size = sizeof(tuple);
+    memcpy(buffer + *buffer_size, &data_copy, data_size);
+    *buffer_size += data_size;
+}
+
 int sent_boot_packet()
 {
 	int srv;
@@ -42,7 +99,7 @@ int sent_boot_packet()
 	size_t boot_message_len = strlen(boot_message);
 
 	rc = sendto(srv, boot_message, boot_message_len, 0, (const struct sockaddr *)&srv_addr, sizeof(struct sockaddr_in));
-	printf("Boot package sent!\n");
+	printf("Boot package sent to %s:%d!\n", CONFIG_APPTESTOPERATOR_TESTBENCH_ADDR, CONFIG_APPTESTOPERATOR_TESTBENCH_PORT);
 	if (rc < 0)
 	{
 		fprintf(stderr, "Failed to send a reply\n");
@@ -55,7 +112,12 @@ out:
 	return rc;
 }
 
-int process_tuples()
+int filter_operator(tuple *tupl)
+{
+	return tupl->a > 0;
+}
+
+int connect_source()
 {
 	int source_fd;
 	int rc = 0;
@@ -83,6 +145,62 @@ int process_tuples()
 	}
 
 	printf("Connected to Source!\n");
+	return source_fd;
+
+close:
+	close(source_fd);
+end:
+	return rc;
+}
+
+int connect_destination()
+{
+	int destination_fd;
+	int rc = 0;
+	ssize_t n;
+	struct sockaddr_in src_addr;
+
+	src_addr.sin_family = AF_INET;
+	lwip_inet_pton(AF_INET, CONFIG_APPTESTOPERATOR_DESTINATION_ADDR, &src_addr.sin_addr.s_addr);
+	src_addr.sin_port = htons(CONFIG_APPTESTOPERATOR_DESTINATION_PORT);
+
+	printf("Connecting to Destination %s:%d\n", CONFIG_APPTESTOPERATOR_DESTINATION_ADDR, CONFIG_APPTESTOPERATOR_DESTINATION_PORT);
+	destination_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+	if (destination_fd < 0)
+	{
+		fprintf(stderr, "Failed to create TCP socket: %d\n", errno);
+		goto end;
+	}
+
+	rc = connect(destination_fd, &src_addr, sizeof(struct sockaddr_in));
+
+	if (rc < 0)
+	{
+		fprintf(stderr, "Failed to Connect: %d\n", rc);
+		goto close;
+	}
+
+	printf("Connected to Destination!\n");
+	return destination_fd;
+
+close:
+	close(destination_fd);
+end:
+	return rc;
+}
+
+int process_tuples()
+{
+	int rc;
+	int source_fd = connect_source();
+	int destination_fd = connect_destination();
+
+	if (source_fd < 0 || destination_fd < 0)
+	{
+		fprintf(stderr, "Failed to connect to source or destination: %d, %d\n", source_fd, destination_fd);
+		goto end;
+	}
 
 	const char *request_tuple_message = "SEND TUPLES!";
 	size_t request_tuple_message_len = strlen(request_tuple_message);
@@ -103,11 +221,36 @@ int process_tuples()
 			fprintf(stderr, "Failed to receive: %d\n", rc);
 			goto close;
 		}
-		printf("Tuple: %.*s\n", rc, recvbuf);
+
+		size_t number_of_tuples = serialize_tuples(recvbuf, rc, tuple_buffer);
+		size_t send_buffer_length = 0;
+
+		printf("number_of_tuples: %d\n", number_of_tuples);
+		for (size_t i = 0; i < number_of_tuples; i++)
+		{
+			if (filter_operator(&tuple_buffer[i]))
+			{
+				print_data(&tuple_buffer[i]);
+				deserialize_tuple(recvbuf, &send_buffer_length, &tuple_buffer[i]);
+			}
+		}
+		
+
+		if (send_buffer_length > 0)
+		{
+			rc = send(destination_fd, recvbuf, send_buffer_length, 0);
+			if (rc < 0)
+			{
+				fprintf(stderr, "Failed to send: %d\n", rc);
+				goto close;
+			}
+		}
+	
 	}
 
 close:
 	close(source_fd);
+	close(destination_fd);
 end:
 	return rc;
 }
