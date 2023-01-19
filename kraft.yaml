@@ -14,6 +14,8 @@ libraries:
   lwip:
     version: 0.11.0
     kconfig:
+      - CONFIG_LWIP_STATS=y
+      - CONFIG_TCP_STATS=y
       - CONFIG_LWIP_UKNETDEV=y
       - CONFIG_LWIP_TCP=y
       - CONFIG_LWIP_THREADS=y

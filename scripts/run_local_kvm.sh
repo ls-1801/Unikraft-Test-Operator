@@ -14,7 +14,7 @@ sudo dnsmasq -d \
         --bind-dynamic \
         --interface=kraft0 \
         --listen-addr=172.44.0.1 \
-        --dhcp-range=172.44.0.2,172.44.0.254,255.255.255.0,12h &> $WORKDIR/dnsmasq.log &
+        --dhcp-range=172.44.0.2,172.44.0.254,255.255.255.0,12h &> dnsmasq.log &
 
 ./qemu-guest.sh disk.raw \
                 -b kraft0 \

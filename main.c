@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <lwip/netif.h>
+#include <lwip/stats.h>
 #include <lwip/ip.h>
 #include <lwip/dhcp.h>
 #include <lwip/timeouts.h>
@@ -15,10 +16,6 @@
 #include <time.h>
 #include <errno.h>
 
-#define LISTEN_PORT 8123
-#define BUFLEN 2048
-static char recvbuf[BUFLEN];
-
 typedef struct
 {
 	int a;
@@ -28,6 +25,8 @@ typedef struct
 	int e;
 } tuple;
 
+#define BUFLEN (sizeof(tuple) * 50)
+static char recvbuf[BUFLEN];
 static tuple tuple_buffer[BUFLEN / sizeof(tuple)];
 
 void print_data(const tuple* data)
@@ -43,7 +42,7 @@ void print_data(const tuple* data)
 
 size_t serialize_tuples(char *buffer, size_t buffer_len, tuple *tuples)
 {
-	size_t number_of_tuples = buffer_len / sizeof(tuple);
+	int number_of_tuples = buffer_len / sizeof(tuple);
 
 	for (int i = 0; i < number_of_tuples; i++)
 	{
@@ -80,7 +79,6 @@ int sent_boot_packet()
 {
 	int srv;
 	int rc = 0;
-	ssize_t n;
 	struct sockaddr_in srv_addr;
 
 	srv_addr.sin_family = AF_INET;
@@ -121,7 +119,6 @@ int connect_source()
 {
 	int source_fd;
 	int rc = 0;
-	ssize_t n;
 	struct sockaddr_in src_addr;
 
 	src_addr.sin_family = AF_INET;
@@ -136,7 +133,7 @@ int connect_source()
 		goto end;
 	}
 
-	rc = connect(source_fd, &src_addr, sizeof(struct sockaddr_in));
+	rc = connect(source_fd, (const struct sockaddr *) &src_addr, sizeof(struct sockaddr_in));
 
 	if (rc < 0)
 	{
@@ -157,7 +154,6 @@ int connect_destination()
 {
 	int destination_fd;
 	int rc = 0;
-	ssize_t n;
 	struct sockaddr_in src_addr;
 
 	src_addr.sin_family = AF_INET;
@@ -173,7 +169,7 @@ int connect_destination()
 		goto end;
 	}
 
-	rc = connect(destination_fd, &src_addr, sizeof(struct sockaddr_in));
+	rc = connect(destination_fd, (const struct sockaddr *) &src_addr, sizeof(struct sockaddr_in));
 
 	if (rc < 0)
 	{
@@ -192,9 +188,14 @@ end:
 
 int process_tuples()
 {
-	int rc;
+	int rc = 0;
 	int source_fd = connect_source();
 	int destination_fd = connect_destination();
+	size_t total_number_of_tuples_received = 0;
+	size_t number_of_tuples_passing = 0;
+	size_t total_number_of_bytes_received = 0;
+	int next_tuple_id = 0;
+	size_t skipped = 0;
 
 	if (source_fd < 0 || destination_fd < 0)
 	{
@@ -213,6 +214,8 @@ int process_tuples()
 		goto close;
 	}
 
+
+
 	while (1)
 	{
 		rc = recv(source_fd, recvbuf, BUFLEN, 0);
@@ -221,16 +224,27 @@ int process_tuples()
 			fprintf(stderr, "Failed to receive: %d\n", rc);
 			goto close;
 		}
+		total_number_of_bytes_received += rc;
 
 		size_t number_of_tuples = serialize_tuples(recvbuf, rc, tuple_buffer);
 		size_t send_buffer_length = 0;
-
-		printf("number_of_tuples: %d\n", number_of_tuples);
+		
 		for (size_t i = 0; i < number_of_tuples; i++)
 		{
+			total_number_of_tuples_received++;
+			
+			if(tuple_buffer[i].b != next_tuple_id) {
+				skipped++;
+			}
+			next_tuple_id = tuple_buffer[i].b + 1;
+			
+#ifdef CONFIG_APPTESTOPERATOR_DBG_SHOW_TUPLES
+			print_data(&tuple_buffer[i]);
+#endif
+
 			if (filter_operator(&tuple_buffer[i]))
 			{
-				print_data(&tuple_buffer[i]);
+				number_of_tuples_passing++;
 				deserialize_tuple(recvbuf, &send_buffer_length, &tuple_buffer[i]);
 			}
 		}
@@ -249,6 +263,8 @@ int process_tuples()
 	}
 
 close:
+	uk_pr_crit("Total Number of Bytes Received %ld\nNumber of Tuples Process: %ld of which %ld passed the predicate!\nSkipped Tuples: %ld", total_number_of_bytes_received, total_number_of_tuples_received, number_of_tuples_passing, skipped);
+	stats_display();
 	close(source_fd);
 	close(destination_fd);
 end:
@@ -276,9 +292,7 @@ int main(int argc __attribute__((unused)),
 		millisleep(1);
 	}
 
-	uk_pr_debug_once("Booted %s", "yo");
-
-	printf("DHCP Ready\n");
+	uk_pr_crit("DHCP Ready\n");
 	sent_boot_packet();
 	millisleep(1000);
 	process_tuples();
